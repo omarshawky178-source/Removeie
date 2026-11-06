@@ -10,6 +10,9 @@ targets:
   Removeie:
     type: application
     platform: iOS
+    scheme:
+      testTargets:
+        - RemoveieSimulatorTests
     sources:
       - path: Removeie/RemoveieApp.swift
       - path: Removeie/assistant.js
@@ -20,3 +23,16 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Removeie
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
         TARGETED_DEVICE_FAMILY: 1
+  RemoveieSimulatorTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: tests/SimulatorTests.swift
+      - path: Removeie/assistant.js
+        buildPhase: resources
+    dependencies:
+      - target: Removeie
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.removeie.personal.simulatortests
+        GENERATE_INFOPLIST_FILE: YES
