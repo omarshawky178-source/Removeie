@@ -28,6 +28,7 @@ enum VideoKind: String, Identifiable {
 
 @MainActor
 final class TikTokSession: NSObject, ObservableObject, WKNavigationDelegate {
+    private let desktopUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15"
     let webView: WKWebView
     @Published var username: String?
     @Published var isScanning = false
@@ -76,7 +77,10 @@ final class TikTokSession: NSObject, ObservableObject, WKNavigationDelegate {
         }
     }
     func openLogin() {
-        if username == nil { webView.load(URLRequest(url: URL(string: "https://www.tiktok.com/login")!)) }
+        if username == nil {
+            webView.customUserAgent = nil
+            webView.load(URLRequest(url: URL(string: "https://www.tiktok.com/login")!))
+        }
     }
     private func navigate(_ url: URL) async -> Bool {
         await withCheckedContinuation { continuation in
@@ -103,6 +107,9 @@ final class TikTokSession: NSObject, ObservableObject, WKNavigationDelegate {
         isScanning = true
         scanningTask = Task {
             defer { isScanning = false }
+            // On iPhone, preferredContentMode alone can still result in TikTok's mobile site.
+            // Keep the existing WebKit data store but request the desktop profile explicitly.
+            webView.customUserAgent = desktopUserAgent
             guard await navigate(url) else { status = "تعذر فتح صفحة الحساب. جرّب تاني."; return }
             do {
                 var opened = false
