@@ -34,6 +34,8 @@ final class TikTokSession: NSObject, ObservableObject, WKNavigationDelegate {
     @Published var isScanning = false
     @Published var hasResults = false
     @Published var showProfilePage = false
+    @Published var diagnostic = ""
+    @Published var diagnosticCopied = false
     @Published var status = ""
     @Published var videos: [VideoItem] = []
     private var navigationCompletion: ((Bool) -> Void)?
@@ -96,6 +98,10 @@ final class TikTokSession: NSObject, ObservableObject, WKNavigationDelegate {
             }
         }
     }
+    private func collectDiagnostics(_ kind: VideoKind, failure: String) async {
+        let details = (try? await evaluate("JSON.stringify(window.removeie && window.removeie.diagnostic('\(kind.rawValue)'))")) as? String ?? "unavailable"
+        diagnostic = "Removeie diagnostics v1; stage=\(failure); \(details)"
+    }
     func scan(_ kind: VideoKind) {
         guard !isScanning, let user = username, let url = URL(string: "https://www.tiktok.com/@\(user)") else {
             status = "سجّل دخولك الأول علشان نقدر نفحص حسابك."
@@ -103,6 +109,8 @@ final class TikTokSession: NSObject, ObservableObject, WKNavigationDelegate {
         }
         videos = []
         hasResults = false
+        diagnostic = ""
+        diagnosticCopied = false
         status = "بنفتح حسابك…"
         isScanning = true
         scanningTask = Task {
@@ -124,19 +132,34 @@ final class TikTokSession: NSObject, ObservableObject, WKNavigationDelegate {
                     if page == "login" { status = "TikTok طلب تسجيل الدخول من جديد. افتح صفحة الفحص وسجّل دخولك." }
                     else if page == "verification" { status = "TikTok طلب خطوة تحقق. افتح صفحة الفحص لإكمالها بنفسك." }
                     else { status = "الفحص ما قدرش يلاقي تبويب \(kind.title). افتح صفحة الفحص وشوف TikTok عرض إيه." }
+                    await collectDiagnostics(kind, failure: "tab-not-found")
                     return
                 }
                 try await Task.sleep(nanoseconds: 2_000_000_000)
                 var found: [String: VideoItem] = [:]
                 var order: [String] = []
                 var noChange = 0
+                var waitingForGrid = 0
                 for _ in 0..<60 {
                     if Task.isCancelled { status = "تم إيقاف الفحص. النتائج غير مكتملة."; return }
                     let json = try await evaluate("JSON.stringify(window.removeie && window.removeie.collect('\(kind.rawValue)'))") as? String ?? ""
-                    guard let data = json.data(using: .utf8), let result = try? JSONDecoder().decode(ScanResponse.self, from: data), result.ok else {
-                        status = "مش قادر أتأكد إن تبويب \(kind.title) مفتوح. الفحص توقف بدون نتائج مؤكدة."
+                    guard let data = json.data(using: .utf8), let result = try? JSONDecoder().decode(ScanResponse.self, from: data) else {
+                        status = "تعذر قراءة صفحة TikTok. الفحص توقف بدون نتائج مؤكدة."
+                        await collectDiagnostics(kind, failure: "invalid-response")
                         return
                     }
+                    if !result.ok {
+                        waitingForGrid += 1
+                        if waitingForGrid < 15 {
+                            status = "بننتظر TikTok يفتح القائمة…"
+                            try await Task.sleep(nanoseconds: 1_000_000_000)
+                            continue
+                        }
+                        status = result.reason == "grid-not-found" ? "تبويب \(kind.title) اتفتح، لكن التطبيق ما لاقاش قائمة الفيديوهات." : "مش قادر أتأكد إن تبويب \(kind.title) اتفتح."
+                        await collectDiagnostics(kind, failure: result.reason ?? "unknown")
+                        return
+                    }
+                    waitingForGrid = 0
                     hasResults = true
                     let before = found.count
                     for video in result.items ?? [] where found[video.id] == nil { found[video.id] = video; order.append(video.id) }
@@ -147,7 +170,7 @@ final class TikTokSession: NSObject, ObservableObject, WKNavigationDelegate {
                     try await Task.sleep(nanoseconds: 1_200_000_000)
                 }
                 status = "لقينا \(videos.count) فيديو. النتيجة ممكن تكون غير مكتملة حسب استجابة TikTok."
-            } catch { status = "الفحص توقف بسبب مشكلة في تحميل TikTok. جرّب تاني." }
+            } catch { status = "الفحص توقف بسبب مشكلة في تحميل TikTok. جرّب تاني."; await collectDiagnostics(kind, failure: "exception") }
         }
     }
     func stop() { scanningTask?.cancel(); webView.stopLoading(); finishNavigation() }
@@ -256,6 +279,13 @@ struct ScanView: View {
             if !session.status.isEmpty { Text(session.status).font(.footnote).foregroundStyle(.secondary) }
             if !session.isScanning && !session.status.isEmpty && !session.hasResults {
                 Button("فتح صفحة الفحص") { session.showProfilePage = true }.buttonStyle(.bordered)
+                if !session.diagnostic.isEmpty {
+                    Button(session.diagnosticCopied ? "تم نسخ تفاصيل الفحص" : "نسخ تفاصيل الفحص") {
+                        UIPasteboard.general.string = session.diagnostic
+                        session.diagnosticCopied = true
+                    }.buttonStyle(.bordered)
+                    Text("التفاصيل تقنية ولا تشمل اسم الحساب أو الروابط أو بيانات الدخول.").font(.caption).foregroundStyle(.secondary)
+                }
             }
             ScrollView {
                 LazyVStack(spacing: 0) {

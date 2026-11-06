@@ -35,6 +35,27 @@
       if (/^\/@[^/]+\/?$/.test(path)) return 'profile';
       return 'other';
     },
+    diagnostic(kind) {
+      const tab = findTab(kind);
+      const names = ['liked-tab', 'like-tab', 'user-liked-tab', 'repost-tab', 'reposts-tab', 'user-post-tab', 'video-tab', 'favorites-tab', 'favorite-tab', 'post-tab'];
+      const tabs = [...document.querySelectorAll('[role="tab"], [data-e2e$="-tab"]')].slice(0, 30).map(el => {
+        const type = el.getAttribute('data-e2e') || '';
+        const state = el.getAttribute('aria-selected') || el.getAttribute('data-selected') || el.getAttribute('data-state') || '';
+        return { type: names.includes(type) ? type : 'other', role: el.getAttribute('role') === 'tab' ? 'tab' : '', selected: ['true', 'false', 'active', 'inactive'].includes(state) ? state : '', visible: isVisible(el) };
+      });
+      return {
+        version: 1,
+        kind,
+        page: this.pageState(),
+        ready: document.readyState,
+        tabFound: !!tab,
+        tabSelected: !!selected(tab),
+        gridCount: document.querySelectorAll('[data-e2e="user-post-item-list"]').length,
+        itemCount: document.querySelectorAll('[data-e2e="user-post-item"]').length,
+        videoLinkCount: document.querySelectorAll('a[href*="/video/"],a[href*="/photo/"]').length,
+        tabs
+      };
+    },
     openTab(kind) { const tab = findTab(kind); if (!tab) return { ok: false, reason: 'tab-not-found' }; tab.click(); return { ok: true }; },
     collect(kind) {
       if (!selected(findTab(kind))) return { ok: false, reason: 'tab-not-confirmed', items: [] };
