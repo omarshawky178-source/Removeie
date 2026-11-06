@@ -31,6 +31,8 @@ final class TikTokSession: NSObject, ObservableObject, WKNavigationDelegate {
     let webView: WKWebView
     @Published var username: String?
     @Published var isScanning = false
+    @Published var hasResults = false
+    @Published var showProfilePage = false
     @Published var status = ""
     @Published var videos: [VideoItem] = []
     private var navigationCompletion: ((Bool) -> Void)?
@@ -57,6 +59,14 @@ final class TikTokSession: NSObject, ObservableObject, WKNavigationDelegate {
     }
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) { finishNavigation() }
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) { finishNavigation() }
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, preferences: WKWebpagePreferences, decisionHandler: @escaping (WKNavigationActionPolicy, WKWebpagePreferences) -> Void) {
+        if let url = navigationAction.request.url,
+           let host = url.host?.lowercased(), (host == "tiktok.com" || host.hasSuffix(".tiktok.com")),
+           url.path.hasPrefix("/@") {
+            preferences.preferredContentMode = .desktop
+        }
+        decisionHandler(.allow, preferences)
+    }
     private func finishNavigation() { navigationCompletion?(false); navigationCompletion = nil }
 
     func refreshAccount() {
@@ -88,15 +98,27 @@ final class TikTokSession: NSObject, ObservableObject, WKNavigationDelegate {
             return
         }
         videos = []
+        hasResults = false
         status = "بنفتح حسابك…"
         isScanning = true
         scanningTask = Task {
             defer { isScanning = false }
             guard await navigate(url) else { status = "تعذر فتح صفحة الحساب. جرّب تاني."; return }
             do {
-                try await Task.sleep(nanoseconds: 2_000_000_000)
-                let open = try await evaluate("JSON.stringify(window.removeie && window.removeie.openTab('\(kind.rawValue)'))") as? String ?? ""
-                guard open.contains("\"ok\":true") else { status = "TikTok ما عرضش تبويب \(kind.title). جرّب تاني بعد تسجيل الدخول."; return }
+                var opened = false
+                for _ in 0..<15 {
+                    if Task.isCancelled { status = "تم إيقاف الفحص."; return }
+                    let open = try await evaluate("JSON.stringify(window.removeie && window.removeie.openTab('\(kind.rawValue)'))") as? String ?? ""
+                    if open.contains("\"ok\":true") { opened = true; break }
+                    try await Task.sleep(nanoseconds: 1_000_000_000)
+                }
+                guard opened else {
+                    let page = try await evaluate("window.removeie && window.removeie.pageState()") as? String ?? "unknown"
+                    if page == "login" { status = "TikTok طلب تسجيل الدخول من جديد. افتح صفحة الفحص وسجّل دخولك." }
+                    else if page == "verification" { status = "TikTok طلب خطوة تحقق. افتح صفحة الفحص لإكمالها بنفسك." }
+                    else { status = "الفحص ما قدرش يلاقي تبويب \(kind.title). افتح صفحة الفحص وشوف TikTok عرض إيه." }
+                    return
+                }
                 try await Task.sleep(nanoseconds: 2_000_000_000)
                 var found: [String: VideoItem] = [:]
                 var order: [String] = []
@@ -108,6 +130,7 @@ final class TikTokSession: NSObject, ObservableObject, WKNavigationDelegate {
                         status = "مش قادر أتأكد إن تبويب \(kind.title) مفتوح. الفحص توقف بدون نتائج مؤكدة."
                         return
                     }
+                    hasResults = true
                     let before = found.count
                     for video in result.items ?? [] where found[video.id] == nil { found[video.id] = video; order.append(video.id) }
                     videos = order.compactMap { found[$0] }
@@ -137,7 +160,7 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                if !showLogin {
+                if !showLogin && !session.showProfilePage {
                     BrowserView(webView: session.webView)
                         .frame(width: 390, height: 700)
                         .opacity(0.01)
@@ -187,10 +210,18 @@ struct ContentView: View {
                         }
                 }
             }
+            .sheet(isPresented: $session.showProfilePage, onDismiss: { session.refreshAccount() }) {
+                NavigationStack {
+                    BrowserView(webView: session.webView)
+                        .navigationTitle("صفحة الفحص")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { session.showProfilePage = false } } }
+                }
+            }
         }
     }
     private func activityRow(_ kind: VideoKind) -> some View {
-        Button { session.videos = []; session.status = ""; selected = kind } label: {
+        Button { session.videos = []; session.hasResults = false; session.status = ""; selected = kind } label: {
             HStack(spacing: 15) {
                 Image(systemName: kind.icon).font(.title2).frame(width: 35)
                 Text(kind.title).font(.headline)
@@ -208,7 +239,7 @@ struct ScanView: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("\(session.videos.count)").font(.system(size: 38, weight: .bold))
+                    Text(session.hasResults ? "\(session.videos.count)" : "—").font(.system(size: 38, weight: .bold))
                     Text("videos found").foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -216,6 +247,9 @@ struct ScanView: View {
                 else { Button("Scan") { session.scan(kind) }.buttonStyle(.borderedProminent).tint(.black) }
             }
             if !session.status.isEmpty { Text(session.status).font(.footnote).foregroundStyle(.secondary) }
+            if !session.isScanning && !session.status.isEmpty && !session.hasResults {
+                Button("فتح صفحة الفحص") { session.showProfilePage = true }.buttonStyle(.bordered)
+            }
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(session.videos) { video in

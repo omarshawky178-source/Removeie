@@ -28,6 +28,13 @@
   const selected = tab => tab && (tab.getAttribute('aria-selected') === 'true' || tab.getAttribute('data-state') === 'active' || tab.getAttribute('data-selected') === 'true');
   window.removeie = {
     account,
+    pageState() {
+      const path = location.pathname.toLowerCase();
+      if (path.includes('login')) return 'login';
+      if (path.includes('verify') || document.querySelector('[id*="captcha"], [class*="captcha"]')) return 'verification';
+      if (/^\/@[^/]+\/?$/.test(path)) return 'profile';
+      return 'other';
+    },
     openTab(kind) { const tab = findTab(kind); if (!tab) return { ok: false, reason: 'tab-not-found' }; tab.click(); return { ok: true }; },
     collect(kind) {
       if (!selected(findTab(kind))) return { ok: false, reason: 'tab-not-confirmed', items: [] };
