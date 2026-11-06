@@ -1,0 +1,22 @@
+name: Removeie
+options:
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    PRODUCT_BUNDLE_IDENTIFIER: com.removeie.personal
+    SWIFT_VERSION: "5.0"
+targets:
+  Removeie:
+    type: application
+    platform: iOS
+    sources:
+      - path: Removeie/RemoveieApp.swift
+      - path: Removeie/assistant.js
+        buildPhase: resources
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Removeie
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        TARGETED_DEVICE_FAMILY: 1
