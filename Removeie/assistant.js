@@ -8,7 +8,11 @@
     try { const url = new URL(href, location.href); return /(^|\.)tiktok\.com$/i.test(url.hostname) ? url.pathname.match(/\/(?:video|photo)\/(\d+)/)?.[1] || null : null; } catch (_) { return null; }
   };
   const isVisible = node => !!node && node.getClientRects().length > 0;
-  const data = () => { try { return JSON.parse(document.getElementById('__UNIVERSAL_DATA_FOR_REHYDRATION__')?.textContent || '{}'); } catch (_) { return {}; } };
+  const data = () => {
+    const live = window.__$UNIVERSAL_DATA$__;
+    if (live && typeof live === 'object' && live.__DEFAULT_SCOPE__) return live;
+    try { return JSON.parse(document.getElementById('__UNIVERSAL_DATA_FOR_REHYDRATION__')?.textContent || '{}'); } catch (_) { return {}; }
+  };
   const account = () => {
     const user = data()?.__DEFAULT_SCOPE__?.['webapp.app-context']?.user;
     const id = user?.uniqueId || user?.unique_id;
@@ -47,7 +51,7 @@
     const secUid = sessionMatchesPage && appMatchesPage && idValid(appId) ? appId :
       sessionMatchesPage && profileMatchesPage && idValid(profileId) ? profileId : null;
     if (!secUid) {
-      const context = JSON.stringify({ script: !!document.getElementById('__UNIVERSAL_DATA_FOR_REHYDRATION__'), page: !!pageName, session: !!sessionName, sessionMatchesPage, appName: !!appName, appId: idValid(appId), appMatchesPage, profileName: !!profileName, profileId: idValid(profileId), profileMatchesPage });
+      const context = JSON.stringify({ live: !!window.__$UNIVERSAL_DATA$__?.__DEFAULT_SCOPE__, script: !!document.getElementById('__UNIVERSAL_DATA_FOR_REHYDRATION__'), page: !!pageName, session: !!sessionName, sessionMatchesPage, appName: !!appName, appId: idValid(appId), appMatchesPage, profileName: !!profileName, profileId: idValid(profileId), profileMatchesPage });
       return { ok: false, reason: 'account-context', context };
     }
     if (typeof cursor !== 'string' || !/^\d{1,30}$/.test(cursor)) return { ok: false, reason: 'invalid-cursor' };
@@ -63,6 +67,7 @@
       if (result.hasMore && (!/^\d{1,30}$/.test(next) || next === cursor)) return { ok: false, reason: 'invalid-next-cursor' };
       const items = [];
       for (const item of result.itemList) {
+        if (typeof item?.id === 'number' && !Number.isSafeInteger(item.id)) return { ok: false, reason: 'invalid-item' };
         const id = String(item?.id || '');
         const author = item?.author?.uniqueId;
         if (!/^\d+$/.test(id) || typeof author !== 'string' || !/^[\w.]+$/.test(author)) return { ok: false, reason: 'invalid-item' };

@@ -112,9 +112,19 @@ final class TikTokSession: NSObject, ObservableObject, WKNavigationDelegate {
     }
     private func readRepostPage(_ cursor: String) async throws -> RepostPageResponse {
         let value = try await webView.callAsyncJavaScript(
-            "return JSON.stringify(await window.removeie.repostPage(cursor))",
+            """
+            let timeout;
+            try {
+                const response = await Promise.race([
+                    window.removeie.repostPage(cursor),
+                    new Promise(resolve => { timeout = setTimeout(() => resolve({ok: false, reason: 'request-timeout'}), 10000); })
+                ]);
+                return JSON.stringify(response);
+            } finally { clearTimeout(timeout); }
+            """,
             arguments: ["cursor": cursor], in: nil, contentWorld: .page
         )
+        try Task.checkCancellation()
         guard let json = value as? String, let bytes = json.data(using: .utf8) else {
             throw NSError(domain: "Removeie", code: 1)
         }
@@ -146,7 +156,12 @@ final class TikTokSession: NSObject, ObservableObject, WKNavigationDelegate {
             for item in items where seenItems.insert(item.id).inserted { videos.append(item) }
             hasResults = true
             status = "بنبحث… لقينا \(videos.count) فيديو"
-            if !hasMore { status = "الفحص اكتمل: لقينا \(videos.count) ريبوست."; return }
+            if !hasMore {
+                status = videos.isEmpty
+                    ? "TikTok رجّع قائمة فاضية؛ مش قادرين نتأكد إن مفيش ريبوستات."
+                    : "TikTok رجّع \(videos.count) ريبوست وأفاد بانتهاء القائمة؛ ممكن تكون النتائج ناقصة."
+                return
+            }
             guard let next = response.cursor, !next.isEmpty else {
                 status = "الفحص توقف قبل نهاية القائمة؛ النتائج غير مكتملة."
                 diagnostic = "Removeie repost API v1; stage=missing-cursor; pages=\(page + 1)"
@@ -177,8 +192,10 @@ final class TikTokSession: NSObject, ObservableObject, WKNavigationDelegate {
             // On iPhone, preferredContentMode alone can still result in TikTok's mobile site.
             // Keep the existing WebKit data store but request the desktop profile explicitly.
             webView.customUserAgent = desktopUserAgent
-            guard await navigate(url) else { status = "تعذر فتح صفحة الحساب. جرّب تاني."; return }
+            let navigated = await navigate(url)
             do {
+                try Task.checkCancellation()
+                guard navigated else { status = "تعذر فتح صفحة الحساب. جرّب تاني."; return }
                 if kind == .repost {
                     try await scanReposts()
                     return
@@ -187,6 +204,7 @@ final class TikTokSession: NSObject, ObservableObject, WKNavigationDelegate {
                 for _ in 0..<15 {
                     if Task.isCancelled { status = "تم إيقاف الفحص."; return }
                     let open = try await evaluate("JSON.stringify(window.removeie && window.removeie.openTab('\(kind.rawValue)'))") as? String ?? ""
+                    try Task.checkCancellation()
                     if open.contains("\"ok\":true") { opened = true; break }
                     try await Task.sleep(nanoseconds: 1_000_000_000)
                 }
@@ -207,6 +225,7 @@ final class TikTokSession: NSObject, ObservableObject, WKNavigationDelegate {
                 for _ in 0..<60 {
                     if Task.isCancelled { status = "تم إيقاف الفحص. النتائج غير مكتملة."; return }
                     let json = try await evaluate("JSON.stringify(window.removeie && window.removeie.collect('\(kind.rawValue)'))") as? String ?? ""
+                    try Task.checkCancellation()
                     guard let data = json.data(using: .utf8), let result = try? JSONDecoder().decode(ScanResponse.self, from: data) else {
                         status = "تعذر قراءة صفحة TikTok. الفحص توقف بدون نتائج مؤكدة."
                         await collectDiagnostics(kind, failure: "invalid-response")
@@ -237,10 +256,20 @@ final class TikTokSession: NSObject, ObservableObject, WKNavigationDelegate {
                 status = usedProfileGrid
                     ? "لقينا \(videos.count) فيديو بشكل تجريبي. راجع الفيديوهات؛ النتائج ممكن تكون غير دقيقة أو غير مكتملة."
                     : "لقينا \(videos.count) فيديو. النتيجة ممكن تكون غير مكتملة حسب استجابة TikTok."
-            } catch { status = "الفحص توقف بسبب مشكلة في تحميل TikTok. جرّب تاني."; await collectDiagnostics(kind, failure: "exception") }
+            } catch is CancellationError {
+                status = "تم إيقاف الفحص. النتائج غير مكتملة."
+            } catch {
+                status = "الفحص توقف بسبب مشكلة في تحميل TikTok. جرّب تاني."
+                await collectDiagnostics(kind, failure: "exception")
+            }
         }
     }
-    func stop() { scanningTask?.cancel(); webView.stopLoading(); finishNavigation() }
+    func stop() {
+        status = "بنوقف الفحص…"
+        scanningTask?.cancel()
+        webView.stopLoading()
+        finishNavigation()
+    }
 }
 
 struct BrowserView: UIViewRepresentable {
