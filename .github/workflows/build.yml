@@ -1,0 +1,28 @@
+name: Build unsigned IPA
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        run: xcodegen generate
+      - name: Build for iPhone
+        run: |
+          xcodebuild -project Removeie.xcodeproj -scheme Removeie -configuration Release \
+            -sdk iphoneos -derivedDataPath build CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" build
+      - name: Create IPA
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/Removeie.app Payload/
+          zip -qr Removeie-unsigned.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Removeie-unsigned
+          path: Removeie-unsigned.ipa
