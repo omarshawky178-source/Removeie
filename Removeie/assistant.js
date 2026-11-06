@@ -30,11 +30,25 @@
   const attempted = {};
   // Read only: use the logged-in web session, and never export its identifier.
   async function repostPage(cursor) {
-    const user = data()?.__DEFAULT_SCOPE__?.['webapp.app-context']?.user;
-    const name = user?.uniqueId || user?.unique_id;
-    const secUid = user?.secUid || user?.sec_uid;
-    if (!name || !secUid || usernameFromPath(location.href)?.toLowerCase() !== String(name).toLowerCase()) {
-      return { ok: false, reason: 'account-context' };
+    const root = data()?.__DEFAULT_SCOPE__;
+    const appUser = root?.['webapp.app-context']?.user;
+    const profileUser = root?.['webapp.user-detail']?.userInfo?.user;
+    const appName = appUser?.uniqueId || appUser?.unique_id;
+    const profileName = profileUser?.uniqueId || profileUser?.unique_id;
+    const pageName = usernameFromPath(location.href);
+    const sessionName = account();
+    const same = (a, b) => typeof a === 'string' && typeof b === 'string' && a.toLowerCase() === b.toLowerCase();
+    const sessionMatchesPage = same(sessionName, pageName);
+    const appMatchesPage = same(appName, pageName);
+    const profileMatchesPage = same(profileName, pageName);
+    const appId = appUser?.secUid || appUser?.sec_uid;
+    const profileId = profileUser?.secUid || profileUser?.sec_uid;
+    const idValid = value => typeof value === 'string' && value.length > 0 && value.length < 512;
+    const secUid = sessionMatchesPage && appMatchesPage && idValid(appId) ? appId :
+      sessionMatchesPage && profileMatchesPage && idValid(profileId) ? profileId : null;
+    if (!secUid) {
+      const context = JSON.stringify({ script: !!document.getElementById('__UNIVERSAL_DATA_FOR_REHYDRATION__'), page: !!pageName, session: !!sessionName, sessionMatchesPage, appName: !!appName, appId: idValid(appId), appMatchesPage, profileName: !!profileName, profileId: idValid(profileId), profileMatchesPage });
+      return { ok: false, reason: 'account-context', context };
     }
     if (typeof cursor !== 'string' || !/^\d{1,30}$/.test(cursor)) return { ok: false, reason: 'invalid-cursor' };
     const params = new URLSearchParams({ aid: '1988', count: '30', coverFormat: '2', cursor, needPinnedItemIds: 'true', post_item_list_request_type: '0', secUid });

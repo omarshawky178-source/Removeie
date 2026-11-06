@@ -28,6 +28,7 @@ struct RepostPageResponse: Decodable {
     let items: [VideoItem]?
     let hasMore: Bool?
     let cursor: String?
+    let context: String?
 }
 
 enum VideoKind: String, Identifiable {
@@ -139,7 +140,7 @@ final class TikTokSession: NSObject, ObservableObject, WKNavigationDelegate {
             }
             guard response.ok, let items = response.items, let hasMore = response.hasMore else {
                 status = "TikTok ما رجّعش قائمة ريبوستات مؤكدة. الفحص غير مكتمل."
-                diagnostic = "Removeie repost API v1; stage=\(response.reason ?? "invalid-response"); http=\(response.httpStatus.map(String.init) ?? "none"); tiktok=\(response.tiktokStatus.map(String.init) ?? "none"); pages=\(page)"
+                diagnostic = "Removeie repost API v2; stage=\(response.reason ?? "invalid-response"); http=\(response.httpStatus.map(String.init) ?? "none"); tiktok=\(response.tiktokStatus.map(String.init) ?? "none"); pages=\(page); context=\(response.context ?? "none")"
                 return
             }
             for item in items where seenItems.insert(item.id).inserted { videos.append(item) }
