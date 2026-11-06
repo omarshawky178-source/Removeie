@@ -17,6 +17,7 @@ struct ScanResponse: Decodable {
     let ok: Bool
     let reason: String?
     let items: [VideoItem]?
+    let source: String?
 }
 
 enum VideoKind: String, Identifiable {
@@ -140,6 +141,7 @@ final class TikTokSession: NSObject, ObservableObject, WKNavigationDelegate {
                 var order: [String] = []
                 var noChange = 0
                 var waitingForGrid = 0
+                var usedProfileGrid = false
                 for _ in 0..<60 {
                     if Task.isCancelled { status = "تم إيقاف الفحص. النتائج غير مكتملة."; return }
                     let json = try await evaluate("JSON.stringify(window.removeie && window.removeie.collect('\(kind.rawValue)'))") as? String ?? ""
@@ -160,6 +162,7 @@ final class TikTokSession: NSObject, ObservableObject, WKNavigationDelegate {
                         return
                     }
                     waitingForGrid = 0
+                    usedProfileGrid = usedProfileGrid || result.source == "profile-grid"
                     hasResults = true
                     let before = found.count
                     for video in result.items ?? [] where found[video.id] == nil { found[video.id] = video; order.append(video.id) }
@@ -169,7 +172,9 @@ final class TikTokSession: NSObject, ObservableObject, WKNavigationDelegate {
                     if noChange >= 4 { break }
                     try await Task.sleep(nanoseconds: 1_200_000_000)
                 }
-                status = "لقينا \(videos.count) فيديو. النتيجة ممكن تكون غير مكتملة حسب استجابة TikTok."
+                status = usedProfileGrid
+                    ? "لقينا \(videos.count) فيديو بشكل تجريبي. راجع الفيديوهات؛ النتائج ممكن تكون غير دقيقة أو غير مكتملة."
+                    : "لقينا \(videos.count) فيديو. النتيجة ممكن تكون غير مكتملة حسب استجابة TikTok."
             } catch { status = "الفحص توقف بسبب مشكلة في تحميل TikTok. جرّب تاني."; await collectDiagnostics(kind, failure: "exception") }
         }
     }
