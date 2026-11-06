@@ -28,6 +28,35 @@
   };
   const selected = tab => tab && (tab.getAttribute('aria-selected') === 'true' || tab.getAttribute('data-state') === 'active' || tab.getAttribute('data-selected') === 'true');
   const attempted = {};
+  // Read only: use the logged-in web session, and never export its identifier.
+  async function repostPage(cursor) {
+    const user = data()?.__DEFAULT_SCOPE__?.['webapp.app-context']?.user;
+    const name = user?.uniqueId || user?.unique_id;
+    const secUid = user?.secUid || user?.sec_uid;
+    if (!name || !secUid || usernameFromPath(location.href)?.toLowerCase() !== String(name).toLowerCase()) {
+      return { ok: false, reason: 'account-context' };
+    }
+    if (typeof cursor !== 'string' || !/^\d{1,30}$/.test(cursor)) return { ok: false, reason: 'invalid-cursor' };
+    const params = new URLSearchParams({ aid: '1988', count: '30', coverFormat: '2', cursor, needPinnedItemIds: 'true', post_item_list_request_type: '0', secUid });
+    try {
+      const response = await fetch('/api/repost/item_list/?' + params, { method: 'GET', credentials: 'same-origin', headers: { accept: '*/*' } });
+      if (!response.ok) return { ok: false, reason: 'http-error', httpStatus: response.status };
+      let result;
+      try { result = await response.json(); } catch (_) { return { ok: false, reason: 'invalid-json' }; }
+      if (!result || result.status_code !== 0) return { ok: false, reason: 'tiktok-rejected', tiktokStatus: Number.isInteger(result?.status_code) ? result.status_code : null };
+      if (!Array.isArray(result.itemList) || typeof result.hasMore !== 'boolean') return { ok: false, reason: 'invalid-data' };
+      const next = result.cursor == null ? '' : String(result.cursor);
+      if (result.hasMore && (!/^\d{1,30}$/.test(next) || next === cursor)) return { ok: false, reason: 'invalid-next-cursor' };
+      const items = [];
+      for (const item of result.itemList) {
+        const id = String(item?.id || '');
+        const author = item?.author?.uniqueId;
+        if (!/^\d+$/.test(id) || typeof author !== 'string' || !/^[\w.]+$/.test(author)) return { ok: false, reason: 'invalid-item' };
+        items.push({ id, url: 'https://www.tiktok.com/@' + author + '/video/' + id, title: String(item.desc || '@' + author).slice(0, 120), image: String(item.video?.cover || '') });
+      }
+      return { ok: true, items, hasMore: result.hasMore, cursor: next };
+    } catch (_) { return { ok: false, reason: 'network-error' }; }
+  }
   const confirmedTab = kind => {
     const tab = attempted[kind] || findTab(kind);
     if (!tab || !tab.isConnected || !selected(tab)) return false;
@@ -69,6 +98,7 @@
   };
   window.removeie = {
     account,
+    repostPage,
     pageState() {
       const path = location.pathname.toLowerCase();
       if (path.includes('login')) return 'login';

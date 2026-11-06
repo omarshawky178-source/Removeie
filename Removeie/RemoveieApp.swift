@@ -20,6 +20,16 @@ struct ScanResponse: Decodable {
     let source: String?
 }
 
+struct RepostPageResponse: Decodable {
+    let ok: Bool
+    let reason: String?
+    let httpStatus: Int?
+    let tiktokStatus: Int?
+    let items: [VideoItem]?
+    let hasMore: Bool?
+    let cursor: String?
+}
+
 enum VideoKind: String, Identifiable {
     case like, repost
     var id: String { rawValue }
@@ -99,6 +109,53 @@ final class TikTokSession: NSObject, ObservableObject, WKNavigationDelegate {
             }
         }
     }
+    private func readRepostPage(_ cursor: String) async throws -> RepostPageResponse {
+        let value = try await webView.callAsyncJavaScript(
+            "return JSON.stringify(await window.removeie.repostPage(cursor))",
+            arguments: ["cursor": cursor], in: nil, contentWorld: .page
+        )
+        guard let json = value as? String, let bytes = json.data(using: .utf8) else {
+            throw NSError(domain: "Removeie", code: 1)
+        }
+        return try JSONDecoder().decode(RepostPageResponse.self, from: bytes)
+    }
+    private func scanReposts() async throws {
+        var cursor = "0"
+        var seenCursors = Set<String>()
+        var seenItems = Set<String>()
+        for page in 0..<500 {
+            if Task.isCancelled { status = "تم إيقاف الفحص. النتائج غير مكتملة."; return }
+            guard seenCursors.insert(cursor).inserted else {
+                status = "الفحص توقف لأن TikTok كرر صفحة؛ النتائج غير مكتملة."
+                diagnostic = "Removeie repost API v1; stage=repeated-cursor; pages=\(page)"
+                return
+            }
+            var response = try await readRepostPage(cursor)
+            if page == 0 {
+                for _ in 0..<10 where !response.ok && response.reason == "account-context" {
+                    try await Task.sleep(nanoseconds: 1_000_000_000)
+                    response = try await readRepostPage(cursor)
+                }
+            }
+            guard response.ok, let items = response.items, let hasMore = response.hasMore else {
+                status = "TikTok ما رجّعش قائمة ريبوستات مؤكدة. الفحص غير مكتمل."
+                diagnostic = "Removeie repost API v1; stage=\(response.reason ?? "invalid-response"); http=\(response.httpStatus.map(String.init) ?? "none"); tiktok=\(response.tiktokStatus.map(String.init) ?? "none"); pages=\(page)"
+                return
+            }
+            for item in items where seenItems.insert(item.id).inserted { videos.append(item) }
+            hasResults = true
+            status = "بنبحث… لقينا \(videos.count) فيديو"
+            if !hasMore { status = "الفحص اكتمل: لقينا \(videos.count) ريبوست."; return }
+            guard let next = response.cursor, !next.isEmpty else {
+                status = "الفحص توقف قبل نهاية القائمة؛ النتائج غير مكتملة."
+                diagnostic = "Removeie repost API v1; stage=missing-cursor; pages=\(page + 1)"
+                return
+            }
+            cursor = next
+        }
+        status = "وصلنا لحد الفحص؛ النتائج غير مكتملة."
+        diagnostic = "Removeie repost API v1; stage=page-limit; pages=500"
+    }
     private func collectDiagnostics(_ kind: VideoKind, failure: String) async {
         let details = (try? await evaluate("JSON.stringify(window.removeie && window.removeie.diagnostic('\(kind.rawValue)'))")) as? String ?? "unavailable"
         diagnostic = "Removeie diagnostics v1; stage=\(failure); \(details)"
@@ -121,6 +178,10 @@ final class TikTokSession: NSObject, ObservableObject, WKNavigationDelegate {
             webView.customUserAgent = desktopUserAgent
             guard await navigate(url) else { status = "تعذر فتح صفحة الحساب. جرّب تاني."; return }
             do {
+                if kind == .repost {
+                    try await scanReposts()
+                    return
+                }
                 var opened = false
                 for _ in 0..<15 {
                     if Task.isCancelled { status = "تم إيقاف الفحص."; return }
@@ -282,8 +343,8 @@ struct ScanView: View {
                 else { Button("Scan") { session.scan(kind) }.buttonStyle(.borderedProminent).tint(.black) }
             }
             if !session.status.isEmpty { Text(session.status).font(.footnote).foregroundStyle(.secondary) }
-            if !session.isScanning && !session.status.isEmpty && !session.hasResults {
-                Button("فتح صفحة الفحص") { session.showProfilePage = true }.buttonStyle(.bordered)
+            if !session.isScanning && !session.status.isEmpty && (!session.hasResults || !session.diagnostic.isEmpty) {
+                if !session.hasResults { Button("فتح صفحة الفحص") { session.showProfilePage = true }.buttonStyle(.bordered) }
                 if !session.diagnostic.isEmpty {
                     Button(session.diagnosticCopied ? "تم نسخ تفاصيل الفحص" : "نسخ تفاصيل الفحص") {
                         UIPasteboard.general.string = session.diagnostic
